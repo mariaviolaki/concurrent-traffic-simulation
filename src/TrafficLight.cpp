@@ -4,55 +4,89 @@
 
 /* Implementation of class "MessageQueue" */
 
-/* 
-template <typename T>
-T MessageQueue<T>::receive()
-{
-    // FP.5a : The method receive should use std::unique_lock<std::mutex> and _condition.wait() 
-    // to wait for and receive new messages and pull them from the queue using move semantics. 
-    // The received object should then be returned by the receive function. 
-}
-
+// Add new message to the queue and send a notification
 template <typename T>
 void MessageQueue<T>::send(T &&msg)
 {
-    // FP.4a : The method send should use the mechanisms std::lock_guard<std::mutex> 
-    // as well as _condition.notify_one() to add a new message to the queue and afterwards send a notification.
+    // Add message to queue under the lock to prevent a data race
+    std::lock_guard<std::mutex> lock(_mutex);
+    _queue.emplace_back(std::move(msg));
+    // Wake up consumer thread
+    _condVar.notify_one();
 }
-*/
+
+// Wait and receive new message - pull it from the queue before returning it
+template <typename T>
+T MessageQueue<T>::receive()
+{
+    // Prevent data race with a lock that can be passed to the condition variable
+    std::unique_lock<std::mutex> lock(_mutex);
+    // Pause thread execution until queue is no longer empty
+    _condVar.wait(lock, [this](){ return !_queue.empty(); });
+
+    // Store last element before removing it from the queue
+    T message = std::move(_queue.back());
+    _queue.pop_back();
+
+    return message;
+}
+
 
 /* Implementation of class "TrafficLight" */
 
-/* 
-TrafficLight::TrafficLight()
-{
-    _currentPhase = TrafficLightPhase::red;
-}
+TrafficLight::TrafficLight() : _currentPhase(TrafficLightPhase::red), _rng(std::random_device{}()) {}
 
-void TrafficLight::waitForGreen()
-{
-    // FP.5b : add the implementation of the method waitForGreen, in which an infinite while-loop 
-    // runs and repeatedly calls the receive function on the message queue. 
-    // Once it receives TrafficLightPhase::green, the method returns.
-}
+TrafficLightPhase TrafficLight::getCurrentPhase() { return _currentPhase; }
 
-TrafficLightPhase TrafficLight::getCurrentPhase()
-{
-    return _currentPhase;
-}
-
+// Method "cycleThroughPhases" starts in a thread, using the thread queue in the base class
 void TrafficLight::simulate()
 {
-    // FP.2b : Finally, the private method „cycleThroughPhases“ should be started in a thread when the public method „simulate“ is called. To do this, use the thread queue in the base class. 
+    threads.emplace_back(&TrafficLight::cycleThroughPhases, this);
 }
 
 // virtual function which is executed in a thread
 void TrafficLight::cycleThroughPhases()
 {
-    // FP.2a : Implement the function with an infinite loop that measures the time between two loop cycles 
-    // and toggles the current phase of the traffic light between red and green and sends an update method 
-    // to the message queue using move semantics. The cycle duration should be a random value between 4 and 6 seconds. 
-    // Also, the while-loop should use std::this_thread::sleep_for to wait 1ms between two cycles. 
+    // Set start time
+    std::chrono::high_resolution_clock::time_point timeStart = std::chrono::high_resolution_clock::now();
+    // Set time cycle range (in milliseconds)
+    std::uniform_int_distribution<int> dist(4000, 6000);
+
+    while (true)
+    {
+        // Assign a random number to the cycle duration
+        int randomDuration = dist(_rng);
+        // Set second time point and calculate difference
+        auto timePoint = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(timePoint - timeStart).count();
+
+        // Toggle red/green traffic light phase
+        if (duration >= randomDuration)
+        {
+            if (_currentPhase == TrafficLightPhase::red)
+                _currentPhase = TrafficLightPhase::green;
+            else
+                _currentPhase = TrafficLightPhase::red;
+
+            // Send new traffic light phase to message queue
+            _msgQueue.send(std::move(_currentPhase));
+            // Set new time starting point
+            timeStart = std::chrono::high_resolution_clock::now();
+        }
+
+        // Wait 1ms to reduce iterations (and load on the CPU)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 }
 
-*/
+void TrafficLight::waitForGreen()
+{
+    // Run infinite while-loop and repeatedly call the receive function on the message queue
+    while (true)
+    {
+        TrafficLightPhase phase = _msgQueue.receive();
+        // Return after receiving TrafficLightPhase::green
+        if (phase == TrafficLightPhase::green)
+            return;
+    }
+}

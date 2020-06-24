@@ -29,6 +29,7 @@ void Graphics::loadBackgroundImg()
     _images.push_back(background);         // first element is the original background
     _images.push_back(background.clone()); // second element will be the transparent overlay
     _images.push_back(background.clone()); // third element will be the result image for display
+     cv::resizeWindow(_windowName, 960, 540);
 }
 
 void Graphics::drawTrafficObjects()
